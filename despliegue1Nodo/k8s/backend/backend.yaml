@@ -1,0 +1,274 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: back-poo2
+  labels:
+    app: backend
+spec:
+  # Ajusta el número de réplicas según necesites
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: santiov22/backend-licomart:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DB_NAME
+              value: "licomart_db"
+            - name: DB_USER
+              value: "licomart_user"
+            - name: DB_PASSWORD
+              value: "licomart_password"
+            - name: DB_HOST
+              # Apuntar al servicio MySQL dentro del mismo namespace back-poo2
+              value: "mysql-service"
+            - name: DB_PORT
+              value: "3306"
+---
+# Service para el backend (combinado con el Deployment)
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: back-poo2
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  # Para acceso desde el host/clúster local exponemos como NodePort
+  # nodePort elegido: 30081 (rango 30000-32767)
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 30081
+
+---
+# Secret con credenciales para MySQL (namespaced en back-poo2)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: back-poo2
+type: Opaque
+stringData:
+  MYSQL_ROOT_PASSWORD: "rootpassword"
+  MYSQL_DATABASE: "licomart_db"
+  MYSQL_USER: "licomart_user"
+  MYSQL_PASSWORD: "licomart_password"
+
+---
+# PVC para MySQL
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: back-poo2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Deployment de MySQL
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: back-poo2
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_DATABASE
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+
+---
+# Service para MySQL dentro del mismo namespace back-poo2
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: back-poo2
+  labels:
+    app: mysql
+spec:
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+  type: ClusterIP
+
+---
+# ConfigMap con script de seed (se ejecutará a través de un Job usando manage.py shell)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seed-scripts
+  namespace: back-poo2
+data:
+  seed_products.py: |
+    from productos.models import Productos
+    products = [
+      {
+        "id": 1,
+        "nombre": "Whisky",
+        "descripcion": "Something special",
+        "stock": 27,
+        "precio": 150000,
+        "imagen": "https://api.lalicorera.com/storage/extras/licores/86913884-something-special-750.webp",
+      },
+      {
+        "id": 2,
+        "nombre": "Ron Medellin",
+        "descripcion": "Dorado",
+        "stock": 24,
+        "precio": 170000,
+        "imagen": "https://olimpica.vtexassets.com/arquivos/ids/1853193/7702049101207.jpg.jpg?v=638827906255700000",
+      },
+      {
+        "id": 3,
+        "nombre": "Vodka Smirnoff",
+        "descripcion": "700ml",
+        "stock": 10,
+        "precio": 50000,
+        "imagen": "https://licoresmedellin.com/cdn/shop/files/vodka-smirnoff-botella-700mlvodka-smirnoff-botella-700mlsmirnofflicores-medellin-2446150_810x.jpg?v=1759122630",
+      },
+      {
+        "id": 4,
+        "nombre": "Aguardiente Amarillo",
+        "descripcion": "Aguardiente amarillo el pionero 375ml",
+        "stock": 20,
+        "precio": 110000,
+        "imagen": "https://olimpica.vtexassets.com/arquivos/ids/2309229/7702168594300.jpg?v=638985758499400000",
+      }
+    ]
+    for p in products:
+        obj, created = Productos.objects.update_or_create(
+            id=p['id'],
+            defaults={
+                'nombre': p['nombre'],
+                'descripcion': p['descripcion'],
+                'stock': p['stock'],
+                'precio': p['precio'],
+                'imagen': p['imagen'],
+            }
+        )
+        if created:
+            print(f"Created product {obj.nombre}")
+
+---
+# Job para ejecutar migraciones y sembrar datos usando el contenedor del backend
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate-seed
+  namespace: back-poo2
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate-and-seed
+          image: santiov22/backend-licomart:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              # Esperar a que MySQL esté disponible
+              for i in {1..30}; do
+                nc -z mysql-service 3306 && break || sleep 2
+              done
+              python manage.py migrate --noinput
+              # Ejecutar el script de seed dentro del contexto de Django
+              python manage.py shell < /seed/seed_products.py
+          env:
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_DATABASE
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+            - name: DB_HOST
+              value: "mysql-service"
+            - name: DB_PORT
+              value: "3306"
+          volumeMounts:
+            - name: seed-scripts
+              mountPath: /seed
+      volumes:
+        - name: seed-scripts
+          configMap:
+            name: seed-scripts

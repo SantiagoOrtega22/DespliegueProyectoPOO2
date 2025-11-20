@@ -17,7 +17,7 @@ services:
 
   backend:
     build: ./backend
-    image: tomascv/backend-licomart:latest   # 👈 importante
+    image: santiov22/backend-licomart:latest   # 👈 importante
     container_name: backend
     restart: always
     depends_on:
@@ -33,7 +33,7 @@ services:
 
   frontend:
     build: ./frontend
-    image: tomascv/frontend-licomart:latest  # 👈 importante
+    image: santiov22/frontend-licomart:latest  # 👈 importante
     container_name: frontend
     restart: always
     depends_on:

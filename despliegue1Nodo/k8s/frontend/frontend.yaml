@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: front-poo2
+  labels:
+    app: frontend
+spec:
+  # Ajusta el número de réplicas según necesites
+  replicas: 3
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: santiov22/frontend-licomart:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          env:
+            - name: API_URL
+              value: "http://localhost:30081"
+---
+# Service para el frontend (combinado con el Deployment)
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: front-poo2
+  labels:
+    app: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  # Para acceso desde localhost en clusters locales (kind/minikube) usamos NodePort.
+  # nodePort elegido: 30080 (puerto en rango 30000-32767). Acceso desde host: http://localhost:30080
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: 30080

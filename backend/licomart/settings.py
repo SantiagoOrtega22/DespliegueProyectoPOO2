@@ -147,7 +147,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_HEADERS = True
 
 # Permitir todos los métodos HTTP
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = True
 
 # Configuración de archivos multimedia
 MEDIA_URL = '/media/'  # URL para acceder a los archivos multimedia
